@@ -1,0 +1,33 @@
+{
+  "dpp_id": "DPP-LOT-EXP-001",
+  "product_id": "PROD-COCOA-BEAN-001",
+  "id_granularity": "batch",
+  "final_lot_id": "LOT-EXP-001",
+  "batch_number": "BATCH-EXP-2026-001",
+  "stage_count": 5,
+  "status": "ready",
+  "traceability": {
+    "events": [
+      "EVT-HARV-001",
+      "EVT-HARV-002",
+      "EVT-HARV-003",
+      "EVT-FERM-001",
+      "EVT-FERM-002",
+      "EVT-DRY-001",
+      "EVT-DRY-002",
+      "EVT-AGG-001",
+      "EVT-SHIP-001"
+    ],
+    "lots": [
+      "LOT-HARV-001",
+      "LOT-HARV-002",
+      "LOT-HARV-003",
+      "LOT-FERM-001",
+      "LOT-FERM-002",
+      "LOT-DRY-001",
+      "LOT-DRY-002",
+      "LOT-AGG-001",
+      "LOT-EXP-001"
+    ]
+  }
+}

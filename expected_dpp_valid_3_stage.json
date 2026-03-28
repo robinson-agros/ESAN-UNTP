@@ -1,0 +1,21 @@
+{
+  "dpp_id": "DPP-LOT3-FINAL-001",
+  "product_id": "PROD-COCOA-BEAN-010",
+  "id_granularity": "batch",
+  "final_lot_id": "LOT3-FINAL-001",
+  "batch_number": "BATCH-3STG-2026-001",
+  "stage_count": 3,
+  "status": "ready",
+  "traceability": {
+    "events": [
+      "EVT3-HARV-001",
+      "EVT3-PROC-001",
+      "EVT3-FINAL-001"
+    ],
+    "lots": [
+      "LOT3-HARV-001",
+      "LOT3-PROC-001",
+      "LOT3-FINAL-001"
+    ]
+  }
+}
