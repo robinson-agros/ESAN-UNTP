@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from dpp_logic import run_scenario
+from dpp_logic import build_map_data, run_scenario
 
 
 def load_expected(name: str) -> dict:
@@ -28,6 +28,11 @@ def test_valid_3_stage_generates_dpp() -> None:
     assert dpp["timeline"]["stage_count"] == expected["stage_count"]
     assert dpp["traceability"]["event_ids"] == expected["traceability"]["events"]
     assert dpp["traceability"]["lot_ids"] == expected["traceability"]["lots"]
+    assert len(dpp["locations"]) == 3
+
+    map_data = build_map_data(result["trace_result"]["trace_df"])
+    assert len(map_data["points"]) == 3
+    assert not map_data["missing_coordinates"]
 
 
 def test_valid_5_stage_generates_dpp() -> None:
@@ -43,6 +48,11 @@ def test_valid_5_stage_generates_dpp() -> None:
     assert dpp["timeline"]["stage_count"] == expected["stage_count"]
     assert dpp["traceability"]["event_ids"] == expected["traceability"]["events"]
     assert dpp["traceability"]["lot_ids"] == expected["traceability"]["lots"]
+    assert len(dpp["locations"]) == len(dpp["event_summary"])
+
+    map_data = build_map_data(result["trace_result"]["trace_df"])
+    assert len(map_data["points"]) == len(dpp["event_summary"])
+    assert len(map_data["segments"]) == len(map_data["points"]) - 1
 
 
 def test_invalid_dataset_blocks_dpp() -> None:

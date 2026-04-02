@@ -23,6 +23,8 @@ EXPECTED_COLUMNS = [
     "event_date_end",
     "country",
     "region",
+    "geo_lat",
+    "geo_lon",
     "product_name",
     "input_lot_ids",
     "output_lot_id",
@@ -64,7 +66,7 @@ TEXT_COLUMNS = [
     "product_category",
 ]
 DATE_COLUMNS = ["event_date_start", "event_date_end"]
-NUMERIC_COLUMNS = ["input_quantity_kg", "output_quantity_kg"]
+NUMERIC_COLUMNS = ["input_quantity_kg", "output_quantity_kg", "geo_lat", "geo_lon"]
 
 
 @dataclass
@@ -165,6 +167,14 @@ def combine_files(files: list[Any]) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame(columns=EXPECTED_COLUMNS + ["input_lot_ids_list", "source_file"])
     return pd.concat(frames, ignore_index=True)
+
+
+def format_date(value: Any) -> str:
+    if pd.isna(value) or value is None:
+        return ""
+    if isinstance(value, pd.Timestamp):
+        return value.date().isoformat()
+    return str(value)
 
 
 def validate_structure(df: pd.DataFrame) -> dict[str, Any]:
@@ -446,6 +456,8 @@ def build_dpp(
             "end_date": end_date.date().isoformat() if pd.notna(end_date) else None,
             "stage_count": int(trace_df["stage_order"].nunique()),
         },
+        "event_summary": build_event_summary(trace_df),
+        "locations": build_location_summary(trace_df),
         "traceability": {
             "event_ids": ordered_event_ids,
             "lot_ids": ordered_lot_ids,
@@ -474,6 +486,197 @@ def build_validation_report(
         if trace_result["cycle_errors"]:
             report["errors"].extend(trace_result["cycle_errors"])
     return report
+
+
+def build_event_summary(trace_df: pd.DataFrame) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    ordered = trace_df.sort_values(["stage_order", "event_date_start", "event_id"], kind="stable")
+    for row in ordered.itertuples(index=False):
+        summary.append(
+            {
+                "event_id": row.event_id,
+                "stage_order": int(row.stage_order) if pd.notna(row.stage_order) else None,
+                "event_type": row.event_type or "",
+                "date_start": format_date(row.event_date_start),
+                "date_end": format_date(row.event_date_end),
+                "actor_name": row.actor_name or "",
+                "facility_name": row.facility_name or "",
+                "output_lot_id": row.output_lot_id or "",
+                "input_lot_ids": list(row.input_lot_ids_list or []),
+            }
+        )
+    return summary
+
+
+def build_location_summary(trace_df: pd.DataFrame) -> list[dict[str, Any]]:
+    locations: list[dict[str, Any]] = []
+    for row in trace_df.sort_values(["stage_order", "event_date_start", "event_id"], kind="stable").itertuples(index=False):
+        if pd.isna(row.geo_lat) or pd.isna(row.geo_lon):
+            continue
+        locations.append(
+            {
+                "event_id": row.event_id,
+                "stage_order": int(row.stage_order) if pd.notna(row.stage_order) else None,
+                "facility_id": row.facility_id or "",
+                "facility_name": row.facility_name or "",
+                "country": row.country or "",
+                "region": row.region or "",
+                "geo_lat": float(row.geo_lat),
+                "geo_lon": float(row.geo_lon),
+            }
+        )
+    return locations
+
+
+def build_map_data(trace_df: pd.DataFrame) -> dict[str, Any]:
+    ordered = trace_df.sort_values(["stage_order", "event_date_start", "event_id"], kind="stable")
+    points: list[dict[str, Any]] = []
+    missing_coordinates: list[str] = []
+    palette = [
+        [15, 118, 110],
+        [217, 119, 6],
+        [37, 99, 235],
+        [220, 38, 38],
+        [124, 58, 237],
+        [20, 184, 166],
+    ]
+
+    for idx, row in enumerate(ordered.itertuples(index=False)):
+        if pd.isna(row.geo_lat) or pd.isna(row.geo_lon):
+            missing_coordinates.append(row.event_id)
+            continue
+        points.append(
+            {
+                "event_id": row.event_id,
+                "stage_order": int(row.stage_order) if pd.notna(row.stage_order) else None,
+                "event_type": row.event_type or "",
+                "facility_name": row.facility_name or "",
+                "region": row.region or "",
+                "country": row.country or "",
+                "date_start": format_date(row.event_date_start),
+                "lat": float(row.geo_lat),
+                "lon": float(row.geo_lon),
+                "color": palette[idx % len(palette)],
+                "tooltip": " | ".join(
+                    part
+                    for part in [
+                        row.event_id or "",
+                        f"Etapa {int(row.stage_order)}" if pd.notna(row.stage_order) else "",
+                        row.facility_name or "",
+                    ]
+                    if part
+                ),
+            }
+        )
+
+    segments = []
+    for idx in range(len(points) - 1):
+        segments.append(
+            {
+                "from_lon": points[idx]["lon"],
+                "from_lat": points[idx]["lat"],
+                "to_lon": points[idx + 1]["lon"],
+                "to_lat": points[idx + 1]["lat"],
+                "color": points[idx]["color"],
+            }
+        )
+
+    center = None
+    if points:
+        center = {
+            "latitude": sum(point["lat"] for point in points) / len(points),
+            "longitude": sum(point["lon"] for point in points) / len(points),
+            "zoom": 5 if len(points) > 1 else 7,
+        }
+
+    return {
+        "points": points,
+        "segments": segments,
+        "center": center,
+        "missing_coordinates": missing_coordinates,
+    }
+
+
+def make_pdf_report(
+    dpp: dict[str, Any],
+    trace_df: pd.DataFrame,
+    validation_report: dict[str, Any],
+) -> bytes:
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import cm
+        from reportlab.pdfgen import canvas
+    except ImportError as exc:
+        raise RuntimeError("La dependencia 'reportlab' no está instalada.") from exc
+
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    margin = 2 * cm
+    y = height - margin
+
+    def ensure_space(lines: int = 1) -> None:
+        nonlocal y
+        if y < margin + (lines * 0.6 * cm):
+            pdf.showPage()
+            y = height - margin
+
+    def write_line(text: str, *, font: str = "Helvetica", size: int = 10, gap: float = 0.5) -> None:
+        nonlocal y
+        ensure_space()
+        pdf.setFont(font, size)
+        pdf.drawString(margin, y, str(text)[:140])
+        y -= gap * cm
+
+    pdf.setTitle(f"DPP {dpp['dpp_id']}")
+    write_line("Digital Product Passport", font="Helvetica-Bold", size=16, gap=0.8)
+    write_line(f"DPP ID: {dpp['dpp_id']}", font="Helvetica-Bold", size=11)
+    write_line(f"Producto: {dpp['product_name'] or '-'}")
+    write_line(f"Lote final: {dpp['final_lot_id']}")
+    write_line(f"Batch: {dpp['batch_number'] or '-'}")
+    write_line(f"Estado validacion: {dpp['validation']['status']}")
+    write_line(f"Emisor: {dpp['issuer']['actor_name'] or '-'}")
+    write_line(f"Instalacion final: {dpp['issuer']['facility_name'] or '-'}", gap=0.8)
+
+    write_line("Resumen de eventos", font="Helvetica-Bold", size=12, gap=0.7)
+    pdf.setFont("Helvetica-Bold", 9)
+    pdf.drawString(margin, y, "Etapa")
+    pdf.drawString(margin + 2.2 * cm, y, "Evento")
+    pdf.drawString(margin + 7.0 * cm, y, "Fecha")
+    pdf.drawString(margin + 10.2 * cm, y, "Instalacion")
+    y -= 0.35 * cm
+    pdf.line(margin, y, width - margin, y)
+    y -= 0.3 * cm
+
+    for event in build_event_summary(trace_df):
+        ensure_space(2)
+        pdf.setFont("Helvetica", 8)
+        pdf.drawString(margin, y, str(event["stage_order"] or "-"))
+        pdf.drawString(margin + 2.2 * cm, y, str(event["event_id"])[:24])
+        pdf.drawString(margin + 7.0 * cm, y, str(event["date_start"])[:16])
+        pdf.drawString(margin + 10.2 * cm, y, str(event["facility_name"])[:34])
+        y -= 0.42 * cm
+
+    y -= 0.2 * cm
+    write_line("Observaciones", font="Helvetica-Bold", size=12, gap=0.7)
+    issues = validation_report["errors"] or validation_report["warnings"] or ["Sin observaciones relevantes."]
+    for issue in issues[:12]:
+        write_line(f"- {issue}", size=9, gap=0.45)
+
+    map_data = build_map_data(trace_df)
+    if map_data["points"]:
+        y -= 0.2 * cm
+        write_line("Ubicaciones", font="Helvetica-Bold", size=12, gap=0.7)
+        for point in map_data["points"][:12]:
+            write_line(
+                f"- Etapa {point['stage_order']}: {point['facility_name']} ({point['lat']:.4f}, {point['lon']:.4f})",
+                size=9,
+                gap=0.45,
+            )
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
 def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
